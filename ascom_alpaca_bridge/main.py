@@ -48,6 +48,7 @@ def main() -> None:
     parser.add_argument("--choose", action="store_true", help="Open ASCOM Telescope Chooser before starting")
     parser.add_argument("--choose-only", action="store_true", help="Open ASCOM Telescope Chooser, save config, and exit")
     parser.add_argument("--log-level", default="info", help="uvicorn log level")
+    parser.add_argument("--access-log", action="store_true", help="Enable uvicorn access logs")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -73,6 +74,7 @@ def main() -> None:
         host=config.server.host,
         port=config.server.port,
         log_level=args.log_level,
+        access_log=args.access_log,
     )
 
 

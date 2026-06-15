@@ -9,8 +9,9 @@ import time
 import tkinter as tk
 import webbrowser
 from pathlib import Path
+from urllib.parse import urlencode
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import customtkinter as ctk
 
@@ -26,8 +27,8 @@ class BridgeGui(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("520x360")
-        self.minsize(480, 330)
+        self.geometry("560x390")
+        self.minsize(520, 360)
 
         ctk.set_appearance_mode("system")
         ctk.set_default_color_theme("blue")
@@ -39,6 +40,8 @@ class BridgeGui(ctk.CTk):
         self.status_var = tk.StringVar(value="Stopped")
         self.telescope_var = tk.StringVar(value=self.config_data.telescope.prog_id)
         self.url_var = tk.StringVar(value=self._alpaca_url())
+        self.ra_var = tk.StringVar(value="--")
+        self.dec_var = tk.StringVar(value="--")
 
         self._build_ui()
         self.after(250, self._drain_logs)
@@ -47,7 +50,7 @@ class BridgeGui(ctk.CTk):
 
     def _build_ui(self) -> None:
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(4, weight=1)
+        self.grid_rowconfigure(5, weight=1)
 
         title = ctk.CTkLabel(self, text=APP_TITLE, font=ctk.CTkFont(size=18, weight="bold"))
         title.grid(row=0, column=0, sticky="w", padx=18, pady=(16, 8))
@@ -59,10 +62,12 @@ class BridgeGui(ctk.CTk):
         self._info_row(info, 0, "Status", self.status_var)
         self._info_row(info, 1, "Telescope", self.telescope_var)
         self._info_row(info, 2, "Alpaca URL", self.url_var)
+        self._info_row(info, 3, "RA", self.ra_var)
+        self._info_row(info, 4, "DEC", self.dec_var)
 
         buttons = ctk.CTkFrame(self, fg_color="transparent")
         buttons.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 12))
-        for column in range(5):
+        for column in range(4):
             buttons.grid_columnconfigure(column, weight=1)
 
         self.choose_button = ctk.CTkButton(buttons, text="Choose", command=self._choose_telescope)
@@ -71,16 +76,25 @@ class BridgeGui(ctk.CTk):
         self.start_button.grid(row=0, column=1, sticky="ew", padx=6)
         self.stop_button = ctk.CTkButton(buttons, text="Stop", command=self._stop_bridge)
         self.stop_button.grid(row=0, column=2, sticky="ew", padx=6)
-        self.copy_button = ctk.CTkButton(buttons, text="Copy URL", command=self._copy_url)
-        self.copy_button.grid(row=0, column=3, sticky="ew", padx=6)
-        self.status_button = ctk.CTkButton(buttons, text="Status", command=self._open_status)
-        self.status_button.grid(row=0, column=4, sticky="ew", padx=(6, 0))
+        self.connect_button = ctk.CTkButton(buttons, text="Connect Scope", command=self._connect_telescope)
+        self.connect_button.grid(row=0, column=3, sticky="ew", padx=(6, 0))
+
+        tools = ctk.CTkFrame(self, fg_color="transparent")
+        tools.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 12))
+        for column in range(3):
+            tools.grid_columnconfigure(column, weight=1)
+        self.disconnect_button = ctk.CTkButton(tools, text="Disconnect Scope", command=self._disconnect_telescope)
+        self.disconnect_button.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.copy_button = ctk.CTkButton(tools, text="Copy URL", command=self._copy_url)
+        self.copy_button.grid(row=0, column=1, sticky="ew", padx=6)
+        self.status_button = ctk.CTkButton(tools, text="Open Status", command=self._open_status)
+        self.status_button.grid(row=0, column=2, sticky="ew", padx=(6, 0))
 
         log_label = ctk.CTkLabel(self, text="Log", anchor="w")
-        log_label.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 4))
+        log_label.grid(row=4, column=0, sticky="ew", padx=18, pady=(0, 4))
 
         self.log_box = ctk.CTkTextbox(self, height=120)
-        self.log_box.grid(row=4, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        self.log_box.grid(row=5, column=0, sticky="nsew", padx=18, pady=(0, 18))
         self.log_box.configure(state="disabled")
 
     def _info_row(self, parent: ctk.CTkFrame, row: int, label: str, variable: tk.StringVar) -> None:
@@ -177,6 +191,63 @@ class BridgeGui(ctk.CTk):
     def _open_status(self) -> None:
         webbrowser.open(f"{self._alpaca_base_url()}/status")
 
+    def _read_telescope_value(self, member: str, timeout: float = 0.5) -> object | None:
+        try:
+            with urlopen(f"{self._alpaca_url()}/{member}", timeout=timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception:
+            return None
+        if payload.get("ErrorNumber") != 0:
+            return None
+        return payload.get("Value")
+
+    def _update_coordinates(self, connected: object) -> None:
+        if connected is not True:
+            self.ra_var.set("--")
+            self.dec_var.set("--")
+            return
+        ra = self._read_telescope_value("rightascension")
+        dec = self._read_telescope_value("declination")
+        if isinstance(ra, (int, float)):
+            self.ra_var.set(f"{ra:.4f} h")
+        else:
+            self.ra_var.set("--")
+        if isinstance(dec, (int, float)):
+            self.dec_var.set(f"{dec:.4f} deg")
+        else:
+            self.dec_var.set("--")
+
+    def _set_telescope_connected(self, connected: bool) -> None:
+        if self.process is None or self.process.poll() is not None:
+            self._append_log("Start the bridge before connecting the telescope.")
+            return
+        label = "true" if connected else "false"
+        endpoint = f"{self._alpaca_url()}/connected"
+        data = urlencode({"Connected": label, "ClientTransactionID": "1"}).encode("utf-8")
+        request = Request(
+            endpoint,
+            data=data,
+            method="PUT",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        try:
+            with urlopen(request, timeout=10) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            self.log_queue.put(f"Telescope connection request failed: {exc}")
+            return
+        if payload.get("ErrorNumber") == 0:
+            action = "connected" if connected else "disconnected"
+            self.log_queue.put(f"Telescope {action}.")
+        else:
+            self.log_queue.put(f"Telescope connection error: {payload.get('ErrorMessage')}")
+
+    def _connect_telescope(self) -> None:
+        threading.Thread(target=self._set_telescope_connected, args=(True,), daemon=True).start()
+
+    def _disconnect_telescope(self) -> None:
+        threading.Thread(target=self._set_telescope_connected, args=(False,), daemon=True).start()
+
     def _drain_logs(self) -> None:
         while True:
             try:
@@ -201,8 +272,10 @@ class BridgeGui(ctk.CTk):
                 elif connected is False:
                     state = "Running, Telescope Disconnected"
                 self.status_var.set(state)
+                self._update_coordinates(connected)
             except (OSError, URLError, TimeoutError, json.JSONDecodeError):
                 self.status_var.set("Starting")
+                self._update_coordinates(False)
         self.after(1000, self._poll_status)
 
     def _on_close(self) -> None:

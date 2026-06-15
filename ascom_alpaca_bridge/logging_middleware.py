@@ -15,6 +15,8 @@ def install_request_logging(app: FastAPI) -> None:
     async def log_request(request: Request, call_next: Any) -> Any:
         started = time.perf_counter()
         response = await call_next(request)
+        if request.url.path in {"/health", "/status"}:
+            return response
         elapsed_ms = (time.perf_counter() - started) * 1000
         LOG.info(
             "%s %s -> %s %.1fms",
