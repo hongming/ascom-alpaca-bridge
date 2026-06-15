@@ -1,0 +1,15 @@
+server:
+  host: "0.0.0.0"
+  port: 11111
+  discovery_port: 32227
+  server_name: "Python ASCOM Telescope Bridge"
+  manufacturer: "Local Python Bridge"
+  manufacturer_version: "0.1.0"
+  location: "Local Windows host"
+
+telescope:
+  device_number: 0
+  prog_id: "ASCOM.Simulator.Telescope"
+  display_name: "ASCOM Telescope"
+  unique_id: "python-ascom-telescope-0"
+  auto_connect: false
