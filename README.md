@@ -42,6 +42,12 @@ Choose an ASCOM Telescope driver and start the bridge:
 py run_bridge.py --config config.yaml --choose
 ```
 
+Or use the small GUI controller:
+
+```powershell
+py run_bridge_gui.py
+```
+
 Or choose once, save the selection, and start later:
 
 ```powershell
