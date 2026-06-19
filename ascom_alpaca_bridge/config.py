@@ -12,7 +12,7 @@ class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 11111
     discovery_port: int = 32227
-    server_name: str = "Python ASCOM Telescope Bridge"
+    server_name: str = "ASCOM Alpaca Bridge"
     manufacturer: str = "Local Python Bridge"
     manufacturer_version: str = "0.1.0"
     location: str = "Local Windows host"
@@ -28,9 +28,42 @@ class TelescopeConfig:
 
 
 @dataclass(frozen=True)
+class DomeConfig:
+    device_number: int = 0
+    prog_id: str = "ASCOM.Simulator.Dome"
+    display_name: str = "ASCOM Dome"
+    unique_id: str = "python-ascom-dome-0"
+    auto_connect: bool = False
+    enabled: bool = False
+
+
+@dataclass(frozen=True)
+class FocuserConfig:
+    device_number: int = 0
+    prog_id: str = "ASCOM.Simulator.Focuser"
+    display_name: str = "ASCOM Focuser"
+    unique_id: str = "python-ascom-focuser-0"
+    auto_connect: bool = False
+    enabled: bool = False
+
+
+@dataclass(frozen=True)
+class CameraConfig:
+    device_number: int = 0
+    prog_id: str = "ASCOM.Simulator.Camera"
+    display_name: str = "ASCOM Camera"
+    unique_id: str = "python-ascom-camera-0"
+    auto_connect: bool = False
+    enabled: bool = False
+
+
+@dataclass(frozen=True)
 class AppConfig:
     server: ServerConfig
     telescope: TelescopeConfig
+    dome: DomeConfig
+    focuser: FocuserConfig
+    camera: CameraConfig
 
 
 def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -57,10 +90,29 @@ def load_config(path: str | Path = "config.yaml") -> AppConfig:
     return AppConfig(
         server=ServerConfig(**_section(raw, "server")),
         telescope=TelescopeConfig(**_section(raw, "telescope")),
+        dome=DomeConfig(**_section(raw, "dome")),
+        focuser=FocuserConfig(**_section(raw, "focuser")),
+        camera=CameraConfig(**_section(raw, "camera")),
     )
 
 
 def write_telescope_prog_id(path: str | Path, prog_id: str) -> None:
+    _write_device_prog_id(path, "telescope", prog_id)
+
+
+def write_dome_prog_id(path: str | Path, prog_id: str) -> None:
+    _write_device_prog_id(path, "dome", prog_id, enabled=True)
+
+
+def write_focuser_prog_id(path: str | Path, prog_id: str) -> None:
+    _write_device_prog_id(path, "focuser", prog_id, enabled=True)
+
+
+def write_camera_prog_id(path: str | Path, prog_id: str) -> None:
+    _write_device_prog_id(path, "camera", prog_id, enabled=True)
+
+
+def _write_device_prog_id(path: str | Path, section_name: str, prog_id: str, enabled: bool | None = None) -> None:
     config_path = Path(path)
     if config_path.exists():
         loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -78,10 +130,12 @@ def write_telescope_prog_id(path: str | Path, prog_id: str) -> None:
         else:
             raw = {}
 
-    telescope = raw.setdefault("telescope", {})
-    if not isinstance(telescope, dict):
-        raise ValueError("Config section 'telescope' must be a mapping")
-    telescope["prog_id"] = prog_id
+    section = raw.setdefault(section_name, {})
+    if not isinstance(section, dict):
+        raise ValueError(f"Config section '{section_name}' must be a mapping")
+    section["prog_id"] = prog_id
+    if enabled is not None:
+        section["enabled"] = enabled
 
     config_path.write_text(
         yaml.safe_dump(raw, sort_keys=False, allow_unicode=True),

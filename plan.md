@@ -43,6 +43,7 @@
 - Alpaca HTTP API：`/api/v1/telescope/0/...`
 - Alpaca management endpoints
 - Alpaca UDP discovery
+- 本地轻量 Web 状态页：`http://127.0.0.1:11111/`
 - ASCOM 原生 Telescope Chooser
 - 基础日志
 - 普通命令行运行
@@ -50,7 +51,8 @@
 ### 第一版不包含
 
 - Camera、Focuser、FilterWheel、Dome、Rotator、Switch 等其他设备
-- Web 配置页面
+- 完整 Web 配置页面
+- 用户身份验证
 - 多设备托管
 - 完整 ASCOM Remote feature parity
 - HTTPS
@@ -148,6 +150,214 @@ ASCOM Telescope Driver
   - `/management/apiversions`
   - `/management/v1/description`
   - `/management/v1/configureddevices`
+
+### `ascom_alpaca_bridge/web_routes.py`
+
+职责：
+
+- 提供无需身份验证的本地轻量 Web 页面：`/`
+- 从已有 `/management/v1/configureddevices` 和设备 Alpaca endpoint 读取状态
+- 展示 Telescope、Dome、Focuser 的设备编号、名称、连接状态和常用状态值
+- 提供基础控制按钮：
+  - 通用：Connect / Disconnect
+  - Dome：SlewToAzimuth / OpenShutter / CloseShutter / AbortSlew
+  - Focuser：Move / Halt / TempComp On / TempComp Off
+- 当前目标是调试和现场确认设备状态，不替代 Alpaca Management API，也不承担公网安全管理职责
+
+Web 页设计备忘：
+
+- 暂时不加入用户身份验证，默认仅建议在可信本机或局域网使用。
+- 若后续开放到不可信网络，需要补身份验证、访问控制和 HTTPS/反向代理部署说明。
+- 页面保持零构建、零前端依赖，避免把轻量 bridge 变成复杂 Web 应用。
+
+## GUI 产品边界和下一阶段剪裁计划
+
+当前判断：
+
+- 本项目的 GUI 应定位为 bridge 的本地启动、选驱动、连接和状态入口，不发展成完整拍摄软件。
+- GUI 当前已加入 Telescope、Dome、Focuser、Camera 的关键控制按钮，适合测试期快速验证四类设备链路。
+- `run_bridge_simple_gui.py` 作为推荐的简化 GUI：只保留 Choose、Start/Stop Bridge、Connect All、Disconnect All、Open Web、基础状态和驱动名称。
+- `run_bridge_gui.py` 保留为调试期完整控制台，方便现场验证具体 endpoint。
+- 先保留现状使用一段时间，基于真实使用频率再剪裁，而不是提前猜测哪些按钮有用。
+- Web 页面继续作为详细状态、诊断和轻量控制兜底；默认用户可以不主动打开 Web。
+- 外部拍摄软件继续负责真正观测流程，例如拍摄序列、保存目录、冷却计划、图像处理、完整 FITS 元数据等。
+
+下一阶段 GUI 剪裁方向：
+
+- 必留：Chooser、Start/Stop Bridge、Connect/Disconnect、基础连接状态。
+- 可留：Open Web、Copy URL、少量高频且安全的现场按钮。
+- 倾向移到 Web：slew、move、exposure、cooler、shutter、参数设置、图像下载。
+- 不在 GUI 做：拍摄序列、复杂状态表、图像预览、设备高级参数配置。
+
+目标：
+
+- GUI 最终成为“设备接入和 bridge 运行入口”。
+- Web 成为“诊断和控制兜底”。
+- Alpaca HTTP 接口和外部天文拍摄软件负责主要业务工作流。
+
+## Camera 分阶段实现计划
+
+本地参考文件：
+
+- `Camera Class — Alpyca_ API Library for ASCOM Alpaca 3.1.2 documentation.mhtml`
+
+Camera 是当前设备类型里复杂度最高的一类，不能按 Telescope/Dome/Focuser 的方式一次性全量接入。主要风险来自：
+
+- 曝光流程是异步状态机，需要通过 `CameraState`、`ImageReady`、`PercentCompleted` 轮询。
+- 图像下载涉及 `ImageArray`、`ImageArrayRaw`、`ImageArrayInfo`，会遇到 COM 数组、像素类型、二维/三维维度、JSON 体积和客户端兼容性问题。
+- 制冷和参数设置会直接影响硬件状态，需要在真实相机上谨慎回归。
+
+### Phase C1：连接和状态读取
+
+目标：让 Alpaca 客户端能发现 Camera、连接 Camera，并读取基础状态，用于真实硬件连通性测试。
+
+范围：
+
+- 配置段：`camera`
+- ASCOM Camera Chooser：`--choose-camera` / `--choose-camera-only`
+- Management configured devices 中上报 `DeviceType = Camera`
+- `/status` 中上报 Camera 连接状态
+- Web 首页显示 Camera 卡片
+- HTTP endpoint：`/api/v1/camera/0/...`
+- 支持连接：
+  - `GET /connected`
+  - `PUT /connected`
+  - `PUT /connect`
+  - `PUT /disconnect`
+- 支持只读状态和能力：
+  - 基础信息：`name`、`description`、`driverinfo`、`driverversion`、`interfaceversion`、`supportedactions`
+  - 连接状态：`connected`、`connecting`、`devicestate`
+  - 相机状态：`camerastate`、`imageready`、`percentcompleted`
+  - 传感器信息：`cameraxsize`、`cameraysize`、`sensortype`、`sensorname`、`pixelsizex`、`pixelsizey`
+  - 制冷/温度只读：`ccdtemperature`、`cooleron`、`coolerpower`、`heatsinktemperature`
+  - 曝光能力：`exposuremin`、`exposuremax`、`exposureresolution`、`canabortexposure`、`canstopexposure`
+  - 参数范围和当前值：`binx`、`biny`、`maxbinx`、`maxbiny`、`startx`、`starty`、`numx`、`numy`、`gain`、`gainmin`、`gainmax`、`gains`、`offset`、`offsetmin`、`offsetmax`、`offsets`、`readoutmode`、`readoutmodes`
+
+明确不做：
+
+- `ImageArray`
+- `ImageArrayRaw`
+- `ImageArrayInfo`
+- FITS 保存或预览
+
+### Phase C2：参数设置
+
+状态：已实现基础 HTTP 写入，等待真实硬件回归。
+
+范围：
+
+- `BinX` / `BinY`
+- `StartX` / `StartY`
+- `NumX` / `NumY`
+- `Gain`
+- `Offset`
+- `ReadoutMode`
+- `FastReadout`
+- `CoolerOn`
+- `SetCCDTemperature`
+- `SubExposureDuration`
+
+验证重点：
+
+- 不同相机驱动对 `Gain`/`Offset` 是数值模式还是名称列表索引模式。
+- `CanFastReadout = False` 时写 `FastReadout` 的错误映射是否合理。
+- `CanSetCCDTemperature = False` 或无制冷相机写 `SetCCDTemperature`/`CoolerOn` 的错误映射是否合理。
+- ROI 设置顺序是否需要客户端先设 `StartX/StartY` 再设 `NumX/NumY`，或反过来。
+
+### Phase C3：曝光控制
+
+状态：已实现基础曝光控制，等待真实硬件回归；暂不返回图像数组。
+
+- `PUT /startexposure`
+- `PUT /stopexposure`
+- `PUT /abortexposure`
+- 通过 `CameraState`、`ImageReady`、`PercentCompleted` 验证状态变化
+
+验证重点：
+
+- `StartExposure(Duration, Light)` 是否立即返回，且 `ImageReady` 先变为 false。
+- 曝光过程中 `CameraState` / `PercentCompleted` 是否符合驱动行为。
+- `StopExposure` 和 `AbortExposure` 在不支持时的错误映射是否合理。
+- Dark/Light 参数在真实驱动上是否被正确接收。
+
+### Phase C4：图像下载
+
+状态：已实现基础 JSON 图像下载，等待真实硬件小 ROI 回归。
+
+- `GET /imagearray`
+- `GET /imagearrayinfo`
+- `GET /imagearrayraw`
+
+重点验证：
+
+- COM SAFEARRAY 到 JSON 的转换
+- 单色与彩色相机维度差异
+- 大图像响应时间和内存占用
+- 主流客户端是否接受返回格式
+- `ImageArrayRaw` 在传统 ASCOM COM 驱动上可能不存在；当前实现会退回 `ImageArray`。
+- `ImageArrayInfo` 在传统 ASCOM COM 驱动上可能不存在；当前实现会在首次成功下载图像后，根据返回数组推导并缓存元数据。在下载图像前返回 `Value = null`。
+- `ImageArray` 只有在曝光完成且 `ImageReady = true` 后才有效；否则真实驱动可能返回 “There is no image available”。
+- 真实硬件首次测试建议使用短曝光、小 ROI 或高 binning，避免一次性返回大图导致 HTTP 响应和内存压力过大。
+
+### Phase C4.5：保存测试图像
+
+状态：已实现桥接器辅助 PNG 预览/下载，等待真实相机回归。
+
+- `GET /imagearray.png`
+- Web 管理页 Camera 卡片加入 `Preview PNG` 和 `Download PNG`
+- PNG 使用最新可用 `ImageArray`，转换为 8-bit 灰度并自动拉伸
+- 当前使用 1% / 99% 百分位做自动拉伸，减少热像素或极端值对预览的影响
+
+验证重点：
+
+- 曝光完成且 `ImageReady = true` 后，Web 预览能显示 PNG。
+- Windows 浏览器下载文件名是否正常，图像方向是否符合相机/驱动预期。
+- 大图下载时页面是否卡顿；真实硬件首次测试仍建议小 ROI 或高 binning。
+- 该接口是本桥接器的轻量测试辅助接口，不属于官方 Alpaca Camera 标准成员。
+
+### Phase C5：Web 页增强
+
+- Camera 卡片显示曝光状态、温度、制冷、ImageReady：已实现
+- 加入短曝光测试按钮：已实现
+- 加入 PNG 预览和下载按钮：已实现
+
+### Phase C5.5：一键曝光并自动预览
+
+状态：已实现 Web 端轻量流程编排，等待真实相机回归。
+
+- Camera 卡片加入 `Expose + Preview`
+- 浏览器端顺序执行：
+  - `PUT /startexposure`
+  - 轮询 `GET /imageready`
+  - 同步读取 `GET /percentcompleted` 和 `GET /camerastate` 显示进度
+  - 曝光完成后刷新状态并加载 `GET /imagearray.png`
+- 当前超时时间为 120 秒，适合短曝光测试；长曝光后续可再做可配置项。
+- 该阶段不新增官方 Alpaca 标准接口，只是 Web 管理页辅助测试流程。
+
+验证重点：
+
+- ASCOM Simulator 和真实相机在 `ImageReady` 变为 true 后，`imagearray.png` 是否立即可取。
+- 曝光过程中 `PercentCompleted` 是否可读；不可读时页面应继续等待而不是失败。
+- 长曝光或驱动卡住时，120 秒超时提示是否清晰。
+
+### Phase C6：FITS 测试下载
+
+状态：已实现桥接器辅助 FITS 下载，等待真实相机回归。
+
+- `GET /imagearray.fits`
+- Web 管理页 Camera 卡片加入 `Download FITS`
+- FITS 保存未拉伸的线性像素值；PNG 仍用于自动拉伸预览
+- 当前轻量实现生成 FITS Primary HDU，不引入 Astropy 等额外依赖
+- 0-65535 像素使用 `BITPIX = 16` + `BZERO = 32768` 的 unsigned 16-bit FITS 约定
+- 彩色或多通道像素当前先转为亮度平面保存；后续可扩展为多平面 FITS
+
+验证重点：
+
+- 真实相机完成曝光后，`Download FITS` 能生成可被常见 FITS 查看器打开的文件。
+- 像素方向、宽高是否符合预期。
+- 16-bit 相机的黑场、亮场数值范围是否合理，没有被 PNG 自动拉伸逻辑影响。
+- 大图 FITS 下载时 HTTP 响应时间和内存占用是否可接受。
+- 该接口是本桥接器的轻量测试辅助接口，不属于官方 Alpaca Camera 标准成员。
 
 ## 最小 Telescope API
 
@@ -543,3 +753,23 @@ ASCOM Telescope Driver
 继续推进 Telescope-only Python bridge。
 
 这个范围足够小，适合快速实现和联调。真正的不确定性不是 Python 能不能做 ASCOM 到 Alpaca 的转换，而是目标客户端具体会调用哪些 Alpaca Telescope endpoints。应尽快用 Simulator 跑通第一版，再立即接入真实客户端，避免实现不必要的接口。
+
+## 当前 GUI / Bridge 工作流备忘
+
+- Bridge 启动只应该启动 HTTP/Alpaca 服务和 discovery，不应该因为 GUI 状态轮询而加载或连接 ASCOM 设备。
+- 设备连接应由用户显式触发；配置里的 `auto_connect` 默认为 `false`，只有用户明确打开时才在服务启动时自动连接。
+- `/status` 用于轻量级健康检查和 GUI 状态显示。未初始化的 ASCOM driver 应显示为 `Disconnected`，不能为了读取 `Connected` 而创建 COM driver。
+- Simple GUI 不再推荐一键连接全部设备。真实设备里 Camera、Mount、Dome 等初始化耗时差异很大，应提供每个设备独立的 `Connect` / `Disconnect`，避免一个慢设备拖住整个工作流。
+- `Start Bridge` 慢时优先排查：是否执行了 `auto_connect`、是否状态轮询触发了 COM 初始化、是否端口上已有旧 bridge、是否 Windows ASCOM driver 自身在初始化时弹窗或等待硬件。
+- Web UI 的按钮操作也应遵循“局部操作、局部刷新”。点击某个设备的 Connect/Disconnect 或参数按钮后，只刷新当前设备卡片，不全量读取所有设备，避免一个设备的慢响应或异常影响其他设备。
+- Camera `StartExposure` 可能在部分 ASCOM 驱动里同步阻塞；Bridge 应将其作为长操作处理，HTTP 立即返回，曝光完成由 `ImageReady`/`CameraState` 轮询判断。
+- ASCOM COM 对象有线程亲和性。每个设备 driver 必须在自己的固定 worker 线程里创建并调用；后台任务只能把请求投递给该 worker，不能直接在临时线程里调用 COM 方法。
+- Camera `ImageArray` / PNG / FITS 下载可能耗时很久。相关 route 不能在 FastAPI event loop 中同步执行，应作为同步 route 交给线程池，保证 GUI 的 `/status` 心跳继续响应。
+- Web 预览图片时只能请求一次 PNG。不要先 `fetch` 校验再把 `<img src>` 指向同一 URL，否则会触发两次耗时的 `ImageArray` 读取。应使用 fetched blob 的 object URL 显示图片。
+- GUI 心跳应容忍短暂 `/status` 超时。图像下载或厂商驱动忙碌时，不能因一次状态请求失败就把所有设备清成 `Unknown` 或把 Bridge 判为 `Starting`。
+- PNG 预览可裁掉纯黑/空白边框，改善部分相机/模拟器返回“全幅黑画布 + 左上角有效图像”的显示效果；原始 `ImageArray` 和 FITS 不应因此被裁剪。
+- SharpCap 等客户端不接受 `ImageArrayInfo.ImageElementType = Unknown(0)`。Bridge 不能原样透传底层 ASCOM driver 的 Unknown 类型，应从最近图像推导，或用 `Int32` 作为兼容兜底，并补齐有效维度。
+- SharpCap/ASCOM Remote 类客户端可能优先请求 `Accept: application/imagebytes`。Bridge 应在 `/imagearray` 支持 `application/imagebytes` 二进制响应，避免客户端被迫走更挑剔、更慢的 JSON 图像数组路径。
+- SharpCap 不支持 imagebytes 中 `ImageElementType=Int16` 且 `TransmissionElementType=Int32` 这种组合。Bridge 的 imagebytes 响应应让输出类型和传输类型一致：整数统一 `Int32/Int32`，浮点统一 `Double/Double`，并按该类型实际打包 payload。
+- Web PNG 预览可以裁剪黑边，但 SharpCap imagebytes 不能裁剪到任意尺寸。SharpCap 会按 `CameraXSize/CameraYSize`、`NumX/NumY` 或 ROI 属性预分配帧缓冲。Bridge 应尽量让这些属性和实际 `ImageArray` / `ImageArrayInfo` 尺寸一致，而不是硬缩放图像去迎合错误的声明尺寸。
+- ASCOM COM/RPC 掉线类错误，例如 `RPC 服务器不可用` / `0x800706BA`，应显示为设备不可用或未连接，不应在 Web UI 中反复展示大段原始 COM 异常。

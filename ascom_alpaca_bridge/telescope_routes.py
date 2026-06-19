@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from threading import Thread
 from datetime import date, datetime
 from typing import Any
 
@@ -9,6 +11,9 @@ from fastapi.responses import JSONResponse
 from .alpaca_response import empty_response, error_response, value_response
 from .ascom_driver import AscomDriverError, TelescopeDriver
 from .config import TelescopeConfig
+
+
+LOG = logging.getLogger(__name__)
 
 
 GET_PROPERTIES = {
@@ -194,6 +199,16 @@ def _ensure_connected(driver: TelescopeDriver, member: str) -> None:
             f"Telescope must be connected before accessing '{member}'",
             error_number=ALPACA_NOT_CONNECTED,
         )
+
+
+def _run_telescope_command_background(driver: TelescopeDriver, method_name: str) -> None:
+    def worker() -> None:
+        try:
+            driver.invoke(method_name)
+        except AscomDriverError:
+            LOG.exception("Telescope %s failed", method_name)
+
+    Thread(target=worker, name=f"telescope-{method_name.lower()}", daemon=True).start()
 
 
 def create_telescope_router(config: TelescopeConfig, driver: TelescopeDriver) -> APIRouter:
@@ -443,27 +458,18 @@ def create_telescope_router(config: TelescopeConfig, driver: TelescopeDriver) ->
 
     @router.put("/park")
     async def park(request: Request) -> Any:
-        try:
-            driver.invoke("Park")
-            return empty_response(request)
-        except AscomDriverError as exc:
-            return _json_error(exc, request)
+        _run_telescope_command_background(driver, "Park")
+        return empty_response(request)
 
     @router.put("/unpark")
     async def unpark(request: Request) -> Any:
-        try:
-            driver.invoke("Unpark")
-            return empty_response(request)
-        except AscomDriverError as exc:
-            return _json_error(exc, request)
+        _run_telescope_command_background(driver, "Unpark")
+        return empty_response(request)
 
     @router.put("/findhome")
     async def find_home(request: Request) -> Any:
-        try:
-            driver.invoke("FindHome")
-            return empty_response(request)
-        except AscomDriverError as exc:
-            return _json_error(exc, request)
+        _run_telescope_command_background(driver, "FindHome")
+        return empty_response(request)
 
     @router.put("/{member}")
     async def set_member(member: str, request: Request) -> Any:

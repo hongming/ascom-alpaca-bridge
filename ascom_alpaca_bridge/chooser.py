@@ -5,7 +5,7 @@ import platform
 from .ascom_driver import AscomDriverError
 
 
-def choose_telescope(previous_prog_id: str = "") -> str:
+def choose_device(device_type: str, previous_prog_id: str = "") -> str:
     if platform.system() != "Windows":
         raise AscomDriverError("ASCOM Chooser is only available on Windows")
 
@@ -18,11 +18,27 @@ def choose_telescope(previous_prog_id: str = "") -> str:
     pythoncom.CoInitialize()
     try:
         chooser = win32com.client.Dispatch("ASCOM.Utilities.Chooser")
-        chooser.DeviceType = "Telescope"
+        chooser.DeviceType = device_type
         selected = chooser.Choose(previous_prog_id or "")
     except Exception as exc:
-        raise AscomDriverError(f"Unable to open ASCOM Telescope Chooser: {exc}") from exc
+        raise AscomDriverError(f"Unable to open ASCOM {device_type} Chooser: {exc}") from exc
 
     if selected is None:
         return ""
     return str(selected).strip()
+
+
+def choose_telescope(previous_prog_id: str = "") -> str:
+    return choose_device("Telescope", previous_prog_id)
+
+
+def choose_dome(previous_prog_id: str = "") -> str:
+    return choose_device("Dome", previous_prog_id)
+
+
+def choose_focuser(previous_prog_id: str = "") -> str:
+    return choose_device("Focuser", previous_prog_id)
+
+
+def choose_camera(previous_prog_id: str = "") -> str:
+    return choose_device("Camera", previous_prog_id)

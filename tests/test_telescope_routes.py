@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -74,6 +76,9 @@ def test_park_unpark_and_findhome() -> None:
     assert client.put("/api/v1/telescope/0/park").json()["ErrorNumber"] == 0
     assert client.put("/api/v1/telescope/0/unpark").json()["ErrorNumber"] == 0
     assert client.put("/api/v1/telescope/0/findhome").json()["ErrorNumber"] == 0
+    deadline = time.time() + 1
+    while len(driver.calls) < 3 and time.time() < deadline:
+        time.sleep(0.01)
     assert ("Park", ()) in driver.calls
     assert ("Unpark", ()) in driver.calls
     assert ("FindHome", ()) in driver.calls
