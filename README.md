@@ -70,6 +70,91 @@ The command-line bridge is still available for scripts, services, and advanced t
 py run_bridge.py --config config.yaml
 ```
 
+## Embed in Another Python Application
+
+`ascom_alpaca_bridge.embedded` provides an external-process integration mode for
+single-file Python applications. The host application can open the ASCOM
+Telescope Chooser, start the bridge as a child process, wait for `/status`, and
+connect the selected telescope through Alpaca. The bridge remains a separate
+process, so the host does not need to manage FastAPI or uvicorn directly.
+
+### One-call integration
+
+The shortest integration is suitable for an application button that performs
+the complete selection and connection flow:
+
+```python
+from ascom_alpaca_bridge import (
+    BridgeRequestError,
+    BridgeStartupError,
+    connect_telescope_bridge,
+)
+
+try:
+    result = connect_telescope_bridge("config.yaml")
+    print(f"Connected to {result.prog_id}")
+    print(f"Alpaca API: {result.base_url}")
+except (BridgeStartupError, BridgeRequestError) as exc:
+    print(f"Unable to connect telescope: {exc}")
+```
+
+`connect_telescope_bridge()` performs these steps:
+
+1. Loads the current telescope ProgID from `config.yaml`.
+2. Opens the Windows ASCOM Telescope Chooser.
+3. Saves the selected ProgID back to the configuration file.
+4. Reuses a bridge already responding on the configured port, or starts
+   `run_bridge.py` as a child process.
+5. Waits until the bridge `/status` endpoint is reachable.
+6. Sends `Connected=true` to the configured Alpaca telescope endpoint.
+
+It returns a `BridgeConnectionResult` containing:
+
+- `base_url`: local Alpaca server URL, such as `http://127.0.0.1:11111`.
+- `prog_id`: the ASCOM telescope driver selected by the user.
+- `reused_existing`: whether an already-running bridge was reused.
+
+### Managed lifecycle
+
+Keep an `ExternalBridgeServer` instance when the host application needs to
+disconnect the telescope or stop the child process during shutdown:
+
+```python
+from ascom_alpaca_bridge import ExternalBridgeServer
+
+bridge = ExternalBridgeServer("config.yaml")
+
+selected_prog_id = bridge.choose_telescope()
+if selected_prog_id:
+    bridge.start(timeout=15)
+    bridge.connect_telescope(timeout=20)
+    alpaca_base_url = bridge.base_url
+
+# During application shutdown:
+if bridge.is_available():
+    bridge.disconnect_telescope()
+bridge.stop()
+```
+
+Important lifecycle behavior:
+
+- `start()` does not start a duplicate process when `/status` is already
+  reachable on the configured port.
+- `stop()` only terminates the child process created by that controller. It
+  does not stop a bridge that was already running independently.
+- `choose_telescope()` returns an empty string when the user cancels the ASCOM
+  Chooser and leaves the configuration unchanged.
+- GUI applications should run selection/start/connect work outside the main UI
+  thread because driver connection and startup can take several seconds.
+- Keep the controller object alive for as long as the host application needs
+  ownership of the child process. The one-call helper returns connection data,
+  not the controller itself.
+
+The main exceptions are `BridgeStartupError` for chooser/process/readiness
+failures and `BridgeRequestError` for Alpaca HTTP or driver connection failures.
+This mode requires Windows, ASCOM Platform, pywin32, an installed telescope
+driver, and a writable configuration file.
+
 Choose an ASCOM Telescope driver and start the bridge:
 
 ```powershell
